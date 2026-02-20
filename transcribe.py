@@ -18,7 +18,7 @@ device = "cuda" if torch.cuda.is_available() else "cpu"
 # Define the model to use (turbo in this case)
 model_name = "turbo"
 # Define the path to your audio file
-audio_file_path = r"C:\Users\halfo\OneDrive\Desktop\test-trans-1.m4a"
+audio_file_path = "ГИ1_Тер_гос_Новосибирск_РеймерАЮ_10.02.m4a"
 output_file_path = Path(audio_file_path).with_suffix(".md")
 
 print(f"Device detected: {device.upper()}")
@@ -29,7 +29,7 @@ print("Model loaded.")
 if os.path.exists(audio_file_path):
     print(f"Transcribing audio from: {audio_file_path}...")
     # Transcribe the audio file with segments
-    result = model.transcribe(audio_file_path, verbose=False)
+    result = model.transcribe(audio_file_path, verbose=False, fp16=False)
     
     print(f"Transcription complete. Saving to: {output_file_path}")
     

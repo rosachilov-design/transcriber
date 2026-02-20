@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Transcriber Pro</title>
+    <link rel="stylesheet" href="style.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600&family=JetBrains+Mono&display=swap"
+        rel="stylesheet">
+    <script src="https://unpkg.com/wavesurfer.js@7"></script>
+</head>
+
+<body>
+    <div id="app" class="app-container">
+        <!-- Root Dropzone -->
+        <div id="dropzone" class="dropzone-overlay">
+            <div class="drop-card">
+                <div class="drop-icon">💿</div>
+                <h2>Drop Audio File</h2>
+                <p>M4A, MP3, WAV supported · High Quality Transcription</p>
+            </div>
+        </div>
+
+        <div id="main-interface" class="interface hidden">
+            <!-- Left Side: Audio and Progress -->
+            <div class="left-panel">
+                <button id="remove-file" class="text-btn">Remove File</button>
+
+                <div class="audio-header">
+                    <h2 id="filename-display">filename.m4a</h2>
+                </div>
+
+                <div id="waveform-container">
+                    <div id="waveform"></div>
+                </div>
+
+                <div class="audio-controls">
+                    <div class="time-display">
+                        <span id="current-time">0:00</span>
+                    </div>
+
+                    <div class="controls-column">
+                        <div class="playback-buttons">
+                            <button id="skip-back-15" class="control-btn" title="Back 15s">« 15s</button>
+                            <button id="skip-back-5" class="control-btn" title="Back 5s">‹ 5s</button>
+                            <button id="play-pause" class="main-play-btn">
+                                <div id="play-icon" class="play-icon"></div>
+                            </button>
+                            <button id="skip-forward-5" class="control-btn" title="Forward 5s">5s ›</button>
+                            <button id="skip-forward-15" class="control-btn" title="Forward 15s">15s »</button>
+                        </div>
+                        <div class="speed-controls">
+                            <button class="speed-btn" data-speed="0.5">0.5x</button>
+                            <button class="speed-btn active" data-speed="1">1x</button>
+                            <button class="speed-btn" data-speed="1.5">1.5x</button>
+                            <button class="speed-btn" data-speed="1.75">1.75x</button>
+                            <button class="speed-btn" data-speed="2">2x</button>
+                            <button class="speed-btn" data-speed="2.5">2.5x</button>
+                        </div>
+                    </div>
+
+                    <div class="time-display">
+                        <span id="duration">0:00</span>
+                    </div>
+                </div>
+
+                <div id="transcription-actions" class="transcription-actions">
+                    <button id="start-transcription-btn" class="start-transcription-btn">
+                        Start Transcription
+                    </button>
+                </div>
+
+                <div class="progress-section hidden" id="progress-section">
+                    <div class="progress-info">
+                        <span id="status-text">Ready</span>
+                        <span id="percent-text">0%</span>
+                    </div>
+                    <div class="progress-bar-container">
+                        <div id="progress-bar" class="progress-bar"></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Right Side: Transcription -->
+            <div class="right-panel">
+                <div class="speaker-management">
+                    <div class="speaker-input-row">
+                        <input type="text" id="speaker-input" placeholder="Add speaker name...">
+                        <button id="add-speaker-btn">Add</button>
+                    </div>
+                    <div id="speaker-list" class="speaker-chips">
+                        <!-- Added speakers will appear here -->
+                    </div>
+                </div>
+
+                <div id="transcription-content" class="transcription-list">
+                    <div class="placeholder-text">
+                        Your transcription will appear here in real-time...
+                    </div>
+                </div>
+
+                <div id="footer-actions" class="footer-actions hidden">
+                    <button id="open-md-btn" class="open-btn">
+                        .md <span id="md-filename-span" class="hidden">transcript.md</span>
+                    </button>
+                    <button id="open-docx-btn" class="open-btn docx-btn">
+                        .docx <span id="docx-filename-span" class="hidden">transcript.docx</span>
+                    </button>
+                </div>
+
+            </div>
+        </div>
+    </div>
+    <script src="app.js"></script>
+</body>
+
+</html>
