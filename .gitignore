@@ -1,0 +1,25 @@
+# Folders (Syntax: folder_name/)
+uploads/
+cache/
+__pycache__/
+.venv/
+venv/
+.idea/
+.vscode/
+
+# Files
+*.m4a
+*.mp3
+*.wav
+*.docx
+*.log
+
+# Keep these documentation/config files
+!future-plans.md
+!cloud_migration.md
+!diarization-plan.md
+!combining.md
+
+# Sensitive files (SSH Keys)
+runpod
+runpod.pub
