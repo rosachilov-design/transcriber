@@ -1,0 +1,8 @@
+# Lightweight local server (no GPU needed)
+fastapi
+uvicorn
+python-multipart
+python-docx
+requests
+boto3
+python-dotenv

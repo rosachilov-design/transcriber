@@ -22,6 +22,9 @@ const removeFileBtn = document.getElementById('remove-file');
 const currentTimeDisplay = document.getElementById('current-time');
 const durationDisplay = document.getElementById('duration');
 
+const startTranscriptionBtn = document.getElementById('start-transcription-btn');
+const progressSection = document.getElementById('progress-section');
+
 function initWaveSurfer(url) {
     if (wavesurfer) wavesurfer.destroy();
 
@@ -65,6 +68,13 @@ function formatTime(seconds) {
     return `${minutes}:${secs.toString().padStart(2, '0')}`;
 }
 
+function formatWait(totalSeconds) {
+    const mins = Math.floor(totalSeconds / 60);
+    const secs = totalSeconds % 60;
+    if (mins > 0) return `${mins}m ${secs}s`;
+    return `${secs}s`;
+}
+
 dropzone.addEventListener('dragover', (e) => {
     e.preventDefault();
     dropzone.classList.add('dragging');
@@ -90,8 +100,30 @@ async function handleFile(file) {
     knownSpeakers = [];
     renderSpeakerList();
 
+    // Load audio player immediately
     const url = URL.createObjectURL(file);
     initWaveSurfer(url);
+
+    // Check if a transcription already exists for this file
+    try {
+        const checkResponse = await fetch(`/check/${file.name}`);
+        const checkData = await checkResponse.json();
+
+        if (checkData.status === 'completed' && checkData.result) {
+            // Transcription exists! Load it directly
+            currentTaskId = file.name;
+            loadCompletedTranscription(checkData);
+            return;
+        }
+    } catch (err) {
+        console.log('No existing transcription found, proceeding with upload.');
+    }
+
+    // No existing transcription — upload to server + S3
+    startTranscriptionBtn.classList.add('hidden');
+    progressSection.classList.remove('hidden');
+    statusText.textContent = '☁️ Uploading to cloud storage...';
+    percentText.textContent = '';
 
     const formData = new FormData();
     formData.append('file', file);
@@ -103,42 +135,75 @@ async function handleFile(file) {
         });
         const data = await response.json();
         currentTaskId = data.task_id;
-        // Don't start polling — wait for "Start Transcription" click
+
+        // Check if upload returned an existing transcription
+        if (data.task_id) {
+            const statusResp = await fetch(`/status/${data.task_id}`);
+            const statusData = await statusResp.json();
+            if (statusData.status === 'completed') {
+                loadCompletedTranscription(statusData);
+                return;
+            }
+        }
+
+        // Start polling for S3 upload progress
+        startPolling();
     } catch (err) {
         statusText.textContent = 'Upload failed';
     }
 }
 
-// Start Transcription button
-const startTranscriptionBtn = document.getElementById('start-transcription-btn');
-const progressSection = document.getElementById('progress-section');
+
+// ─── Load Completed Transcription ───
+
+function loadCompletedTranscription(data) {
+    progressSection.classList.add('hidden');
+    startTranscriptionBtn.classList.add('hidden');
+    statusText.textContent = '✅ Transcription loaded';
+
+    transcriptionContent.innerHTML = '';
+    segments = data.result;
+    lastSegmentCount = 0;
+
+    data.result.forEach((seg, idx) => {
+        const div = createSegmentEl(seg, idx);
+        transcriptionContent.appendChild(div);
+    });
+    lastSegmentCount = data.result.length;
+
+    // Show download buttons
+    if (data.md_path) mdFilenameSpan.textContent = data.md_path;
+    if (data.docx_path) docxFilenameSpan.textContent = data.docx_path;
+    footerActions.classList.remove('hidden');
+
+    // Collect unique speakers from the transcription
+    const speakerSet = new Set(data.result.map(s => s.speaker));
+    knownSpeakers = [...speakerSet];
+    renderSpeakerList();
+    refreshAllSegments();
+}
+
+
+// ─── Start Transcription (S3 Upload) ───
 
 startTranscriptionBtn.onclick = async () => {
+    // In the Pod workflow, this button triggers S3 upload
+    // The transcription itself happens on RunPod
     if (!currentTaskId) return;
 
     startTranscriptionBtn.disabled = true;
-    startTranscriptionBtn.textContent = 'Starting...';
+    startTranscriptionBtn.textContent = 'Uploading...';
 
-    try {
-        const response = await fetch(`/transcribe/${currentTaskId}`, {
-            method: 'POST'
-        });
-        const data = await response.json();
-
-        if (data.status === 'started') {
-            startTranscriptionBtn.classList.add('hidden');
-            progressSection.classList.remove('hidden');
-            startPolling();
-        } else {
-            startTranscriptionBtn.disabled = false;
-            startTranscriptionBtn.textContent = 'Start Transcription';
-        }
-    } catch (err) {
-        statusText.textContent = 'Failed to start transcription';
-        startTranscriptionBtn.disabled = false;
-        startTranscriptionBtn.textContent = 'Start Transcription';
-    }
+    const formData = new FormData();
+    // Re-upload is not needed here since file is already on server
+    // Just trigger S3 upload via status check
+    startTranscriptionBtn.classList.add('hidden');
+    progressSection.classList.remove('hidden');
+    statusText.textContent = '☁️ File uploaded to cloud. Run worker on Pod to transcribe.';
 };
+
+
+// ─── Polling ───
 
 function startPolling() {
     if (statusInterval) clearInterval(statusInterval);
@@ -159,74 +224,66 @@ function startPolling() {
         } catch (err) {
             console.error('Status check failed:', err);
         }
-    }, 1000); // Poll every second for live feel
+    }, 2000);
 }
+
+
+// ─── UI Updates ───
 
 function updateUI(data) {
-    progressBar.style.width = `${data.progress}%`;
-    percentText.textContent = `${data.progress}%`;
-
-    if (data.status === 'diarizing') {
-        statusText.textContent = 'Identifying speakers...';
-    } else if (data.status === 'aligning') {
-        statusText.textContent = 'Aligning words to speakers...';
-    } else if (data.status === 'transcribing') {
-        statusText.textContent = 'Transcribing audio...';
-    } else {
-        statusText.textContent = data.status === 'completed' ? 'Transcription Finished' : 'Processing...';
+    if (data.status === 'uploading') {
+        progressSection.classList.remove('hidden');
+        startTranscriptionBtn.classList.add('hidden');
+        statusText.textContent = '☁️ Uploading to cloud...';
+        percentText.textContent = `${data.progress || 0}%`;
+        progressBar.style.width = `${data.progress || 0}%`;
+    }
+    else if (data.status === 'uploaded') {
+        // S3 upload done
+        progressSection.classList.remove('hidden');
+        statusText.textContent = '✅ Uploaded to cloud! Now run the worker on your Pod.';
+        percentText.textContent = '100%';
+        progressBar.style.width = '100%';
+        clearInterval(statusInterval);
+    }
+    else if (data.status === 'completed') {
+        loadCompletedTranscription(data);
+        clearInterval(statusInterval);
+    }
+    else if (data.status === 'error') {
+        progressSection.classList.remove('hidden');
+        statusText.textContent = `❌ Error: ${data.error || 'Unknown'}`;
+        percentText.textContent = '';
+        progressBar.style.width = '0%';
     }
 
-    if (data.result) {
-        // 1. Handle new segments
-        if (data.result.length > lastSegmentCount) {
-            if (lastSegmentCount === 0) transcriptionContent.innerHTML = '';
+    // Handle live result segments (if transcribing locally)
+    if (data.result && data.result.length > 0 && data.result.length > lastSegmentCount) {
+        if (lastSegmentCount === 0) transcriptionContent.innerHTML = '';
 
-            const newSegments = data.result.slice(lastSegmentCount);
-            newSegments.forEach((seg, idx) => {
-                const globalIdx = lastSegmentCount + idx;
-                const div = createSegmentEl(seg, globalIdx);
-                transcriptionContent.appendChild(div);
-            });
+        const newSegments = data.result.slice(lastSegmentCount);
+        newSegments.forEach((seg, idx) => {
+            const globalIdx = lastSegmentCount + idx;
+            const div = createSegmentEl(seg, globalIdx);
+            transcriptionContent.appendChild(div);
+        });
 
-            segments = data.result;
-            lastSegmentCount = data.result.length;
-
-            // Auto scroll
-            transcriptionContent.scrollTop = transcriptionContent.scrollHeight;
-        }
-
-        // 2. Update last segment text if it grew (due to live merging)
-        else if (data.result.length === lastSegmentCount && lastSegmentCount > 0) {
-            const lastIdx = lastSegmentCount - 1;
-            const serverText = data.result[lastIdx].text;
-            if (serverText !== segments[lastIdx].text) {
-                segments[lastIdx].text = serverText;
-                const lastEl = document.getElementById(`segment-${lastIdx}`);
-                if (lastEl) {
-                    lastEl.querySelector('.segment-text').textContent = serverText;
-                    // Keep scroll at bottom during growth
-                    transcriptionContent.scrollTop = transcriptionContent.scrollHeight;
-                }
-            }
-        }
-    }
-
-    if (data.status === 'completed') {
-        mdFilenameSpan.textContent = data.md_path;
-        if (data.docx_path) docxFilenameSpan.textContent = data.docx_path;
-        footerActions.classList.remove('hidden');
+        segments = data.result;
+        lastSegmentCount = data.result.length;
+        transcriptionContent.scrollTop = transcriptionContent.scrollHeight;
     }
 }
 
 
-// DOM Elements
+// ─── Speaker Management ───
+
 const speakerInput = document.getElementById('speaker-input');
 const addSpeakerBtn = document.getElementById('add-speaker-btn');
 const speakerList = document.getElementById('speaker-list');
 
 addSpeakerBtn.onclick = () => {
     const name = speakerInput.value.trim();
-    if (name && !knownSpeakers.includes(name) && knownSpeakers.length < 5) {
+    if (name && !knownSpeakers.includes(name) && knownSpeakers.length < 10) {
         knownSpeakers.push(name);
         speakerInput.value = '';
         renderSpeakerList();
@@ -275,19 +332,28 @@ async function setSegmentSpeaker(index, name) {
         });
 
         if (response.ok) {
-            segments[index].speaker = name;
-            const el = document.getElementById(`segment-${index}`);
-            if (el) {
-                el.querySelector('.speaker-name').textContent = name;
-                el.querySelectorAll('.speaker-pill').forEach(pill => {
-                    pill.classList.toggle('active', pill.textContent === name);
-                });
-            }
+            // Update all segments with the old speaker name
+            const oldName = segments[index].speaker;
+            segments.forEach((seg, i) => {
+                if (seg.speaker === oldName) {
+                    seg.speaker = name;
+                    const el = document.getElementById(`segment-${i}`);
+                    if (el) {
+                        el.querySelector('.speaker-name').textContent = name;
+                        el.querySelectorAll('.speaker-pill').forEach(pill => {
+                            pill.classList.toggle('active', pill.textContent === name);
+                        });
+                    }
+                }
+            });
         }
     } catch (err) {
         console.error('Update failed:', err);
     }
 }
+
+
+// ─── Segment Rendering ───
 
 function createSegmentEl(seg, index) {
     const div = document.createElement('div');
@@ -334,7 +400,9 @@ function highlightTranscription(currentTime) {
     }
 }
 
-// Controls
+
+// ─── Controls ───
+
 playPauseBtn.onclick = () => wavesurfer.playPause();
 document.getElementById('skip-back-15').onclick = () => wavesurfer.skip(-15);
 document.getElementById('skip-back-5').onclick = () => wavesurfer.skip(-5);
@@ -361,7 +429,6 @@ document.getElementById('open-docx-btn').onclick = () => {
     const docx = docxFilenameSpan.textContent;
     if (docx) window.open(`/download/${docx}`, '_blank');
 };
-
 
 removeFileBtn.onclick = () => location.reload();
 

@@ -1,0 +1,16 @@
+# GPU Engine Dependencies (For RunPod)
+openai-whisper
+fastapi
+uvicorn
+python-multipart
+python-docx
+pyannote.audio
+soundfile
+torch
+torchvision
+torchaudio
+speechbrain
+omegaconf
+einops
+boto3
+python-dotenv
