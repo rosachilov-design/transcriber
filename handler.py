@@ -143,8 +143,13 @@ def transcribe_core(file_path: Path):
     all_speaker_words = []
 
     for i, chunk in enumerate(natural_chunks):
-        start_time = chunk["start"]
-        end_time = chunk["end"]
+        actual_start = chunk["start"]
+        actual_end = chunk["end"]
+        
+        # 10 seconds of overlapping context to improve boundary precision
+        pad = 10.0
+        start_time = max(0, actual_start - pad)
+        end_time = actual_end + pad
         duration_s = end_time - start_time
         if duration_s <= 0:
             continue
@@ -173,22 +178,26 @@ def transcribe_core(file_path: Path):
                  if not words:
                      text = re.sub(r'\[.*?\]', '', segment.text).strip()
                      if text:
-                         s_time = segment.start + start_time
-                         e_time = segment.end + start_time
-                         all_speaker_words.append({
-                             "word": text, "start": s_time, "end": e_time,
-                             "speaker_raw": get_speaker_for_word(timeline, s_time, e_time)
-                         })
+                         abs_start = segment.start + start_time
+                         abs_end = segment.end + start_time
+                         midpoint = (abs_start + abs_end) / 2.0
+                         if actual_start <= midpoint <= actual_end:
+                             all_speaker_words.append({
+                                 "word": text, "start": abs_start, "end": abs_end,
+                                 "speaker_raw": get_speaker_for_word(timeline, abs_start, abs_end)
+                             })
                      continue
                  for w in words:
                      word_text = getattr(w, "word", "").strip()
                      if word_text:
-                         s_time = w.start + start_time
-                         e_time = w.end + start_time
-                         all_speaker_words.append({
-                             "word": word_text, "start": s_time, "end": e_time,
-                             "speaker_raw": get_speaker_for_word(timeline, s_time, e_time)
-                         })
+                         abs_start = w.start + start_time
+                         abs_end = w.end + start_time
+                         midpoint = (abs_start + abs_end) / 2.0
+                         if actual_start <= midpoint <= actual_end:
+                             all_speaker_words.append({
+                                 "word": word_text, "start": abs_start, "end": abs_end,
+                                 "speaker_raw": get_speaker_for_word(timeline, abs_start, abs_end)
+                             })
         except Exception as e:
              print(f"Skipping chunk {i}: {e}")
              

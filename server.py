@@ -365,8 +365,13 @@ def run_transcribe_task(file_path: Path, task_id: str):
         all_speaker_words = []
         
         for i, chunk in enumerate(natural_chunks):
-            start_time = chunk["start"]
-            end_time = chunk["end"]
+            actual_start = chunk["start"]
+            actual_end = chunk["end"]
+            
+            # 10 seconds of overlapping context to improve boundary precision
+            pad = 10.0
+            start_time = max(0, actual_start - pad)
+            end_time = actual_end + pad
             duration_s = end_time - start_time
             
             if duration_s <= 0:
@@ -412,10 +417,12 @@ def run_transcribe_task(file_path: Path, task_id: str):
                         if text:
                             abs_start = segment.start + start_time
                             abs_end = segment.end + start_time
-                            raw = get_speaker_for_word(timeline, abs_start, abs_end)
-                            all_speaker_words.append({
-                                "word": text, "start": abs_start, "end": abs_end, "speaker_raw": raw
-                            })
+                            midpoint = (abs_start + abs_end) / 2.0
+                            if actual_start <= midpoint <= actual_end:
+                                raw = get_speaker_for_word(timeline, abs_start, abs_end)
+                                all_speaker_words.append({
+                                    "word": text, "start": abs_start, "end": abs_end, "speaker_raw": raw
+                                })
                         continue
                     
                     for w in words:
@@ -423,10 +430,12 @@ def run_transcribe_task(file_path: Path, task_id: str):
                         if not word_text: continue
                         abs_start = w.start + start_time
                         abs_end = w.end + start_time
-                        raw = get_speaker_for_word(timeline, abs_start, abs_end)
-                        all_speaker_words.append({
-                            "word": word_text, "start": abs_start, "end": abs_end, "speaker_raw": raw
-                        })
+                        midpoint = (abs_start + abs_end) / 2.0
+                        if actual_start <= midpoint <= actual_end:
+                            raw = get_speaker_for_word(timeline, abs_start, abs_end)
+                            all_speaker_words.append({
+                                "word": word_text, "start": abs_start, "end": abs_end, "speaker_raw": raw
+                            })
             except Exception as chunk_err:
                 if "cublas" in str(chunk_err).lower() or "cudnn" in str(chunk_err).lower() or getattr(chunk_err, "message", "") == "Library cublas64_12.dll is not found or cannot be loaded":
                     log_info(f"WARNING: Chunk {i+1} faster-whisper DLL error ({chunk_err}), falling back to openai-whisper...")
@@ -462,10 +471,12 @@ def run_transcribe_task(file_path: Path, task_id: str):
                             if text:
                                 abs_start = segment["start"] + start_time
                                 abs_end = segment["end"] + start_time
-                                raw = get_speaker_for_word(timeline, abs_start, abs_end)
-                                all_speaker_words.append({
-                                    "word": text, "start": abs_start, "end": abs_end, "speaker_raw": raw
-                                })
+                                midpoint = (abs_start + abs_end) / 2.0
+                                if actual_start <= midpoint <= actual_end:
+                                    raw = get_speaker_for_word(timeline, abs_start, abs_end)
+                                    all_speaker_words.append({
+                                        "word": text, "start": abs_start, "end": abs_end, "speaker_raw": raw
+                                    })
                             continue
                         
                         for w in words:
@@ -473,10 +484,12 @@ def run_transcribe_task(file_path: Path, task_id: str):
                             if not word_text: continue
                             abs_start = w["start"] + start_time
                             abs_end = w["end"] + start_time
-                            raw = get_speaker_for_word(timeline, abs_start, abs_end)
-                            all_speaker_words.append({
-                                "word": word_text, "start": abs_start, "end": abs_end, "speaker_raw": raw
-                            })
+                            midpoint = (abs_start + abs_end) / 2.0
+                            if actual_start <= midpoint <= actual_end:
+                                raw = get_speaker_for_word(timeline, abs_start, abs_end)
+                                all_speaker_words.append({
+                                    "word": word_text, "start": abs_start, "end": abs_end, "speaker_raw": raw
+                                })
                 else:
                     log_info(f"WARNING: Chunk {i+1} failed completely ({chunk_err}), skipping...")
             finally:
