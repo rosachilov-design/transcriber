@@ -67,9 +67,23 @@ Open `http://localhost:8000` in your browser:
 - Rename speakers with the pill system
 - Download as .md or .docx
 
-## Cost Estimate
-| Audio Length | GPU Time | Cost |
-|---|---|---|
-| 1 hour | ~5 min | ~$0.06 |
-| 6 hours/week | ~30 min | ~$0.35/week |
-| Network Volume | 24/7 storage | ~$3.50/month |
+## Tips & Troubleshooting
+
+### 1. Force Re-transcribe
+If you want to re-run a file (e.g., to use the new Large-v3 model), you must delete the old JSON result on the Pod:
+```bash
+rm uploads/Interview1.json
+python remote_worker.py
+```
+
+### 2. Auto-moving files
+The worker now automatically looks for files in `/workspace/` and moves them into `transcriber/uploads/`. If your files are missing, just run the worker and it will find them.
+
+### 3. Session Reliability
+Use `screen` to keep your worker alive if your terminal disconnects:
+```bash
+apt update && apt install -y screen
+screen -S transcriber
+python remote_worker.py
+# (Use Ctrl+A then D to detach)
+```

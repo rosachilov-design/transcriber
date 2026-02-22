@@ -5,7 +5,9 @@ let segments = [];
 let lastSegmentCount = 0;
 
 // DOM Elements
+const launchScreen = document.getElementById('launch-screen');
 const dropzone = document.getElementById('dropzone');
+const fileInput = document.getElementById('file-input');
 const mainInterface = document.getElementById('main-interface');
 const filenameDisplay = document.getElementById('filename-display');
 const progressBar = document.getElementById('progress-bar');
@@ -17,49 +19,104 @@ const transcriptionContent = document.getElementById('transcription-content');
 const footerActions = document.getElementById('footer-actions');
 const mdFilenameSpan = document.getElementById('md-filename-span');
 const docxFilenameSpan = document.getElementById('docx-filename-span');
-
 const removeFileBtn = document.getElementById('remove-file');
 const currentTimeDisplay = document.getElementById('current-time');
 const durationDisplay = document.getElementById('duration');
-
-const startTranscriptionBtn = document.getElementById('start-transcription-btn');
 const progressSection = document.getElementById('progress-section');
+const localLogConsole = document.getElementById('local-log-console');
+const startDiarizeBtn = document.getElementById('start-diarize-btn');
+const startTranscribeBtn = document.getElementById('start-transcribe-btn');
+
+let lastStatus = null;
+
+// ─── Dropzone & File Input ───
+
+// Drag events on the entire launch screen
+document.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    dropzone.classList.add('dragging');
+});
+
+document.addEventListener('dragleave', (e) => {
+    if (e.relatedTarget === null) dropzone.classList.remove('dragging');
+});
+
+document.addEventListener('drop', (e) => {
+    e.preventDefault();
+    dropzone.classList.remove('dragging');
+    const files = e.dataTransfer.files;
+    if (files.length > 0) handleFile(files[0]);
+});
+
+// Click on card opens file browser
+dropzone.addEventListener('click', (e) => {
+    // Don't trigger if clicking a button
+    if (e.target.closest('button')) return;
+    fileInput.click();
+});
+
+fileInput.addEventListener('change', () => {
+    if (fileInput.files.length > 0) handleFile(fileInput.files[0]);
+});
 
 function initWaveSurfer(url) {
     if (wavesurfer) wavesurfer.destroy();
 
-    wavesurfer = WaveSurfer.create({
-        container: '#waveform',
-        waveColor: '#475569',
-        progressColor: '#f97316',
-        cursorColor: '#f97316',
-        barWidth: 3,
-        barGap: 3,
-        barRadius: 4,
-        responsive: true,
-        height: 180,
-        normalize: true
+    // Create a real <audio> element for streaming playback (no full decode)
+    const audioEl = document.createElement('audio');
+    audioEl.crossOrigin = 'anonymous';
+    audioEl.preload = 'metadata';
+    audioEl.src = url;
+
+    // Wait for metadata so we know the real duration before creating WaveSurfer
+    audioEl.addEventListener('loadedmetadata', () => {
+        const realDuration = audioEl.duration;
+        durationDisplay.textContent = formatTime(realDuration);
+
+        // Generate randomized peaks that look like a real waveform
+        const numPeaks = Math.max(500, Math.floor(realDuration * 10));
+        const fakePeaks = new Float32Array(numPeaks);
+        let val = 0.3;
+        for (let i = 0; i < numPeaks; i++) {
+            val += (Math.random() - 0.5) * 0.15;
+            val = Math.max(0.05, Math.min(0.95, val));
+            fakePeaks[i] = val;
+        }
+
+        wavesurfer = WaveSurfer.create({
+            container: '#waveform',
+            waveColor: '#475569',
+            progressColor: '#f97316',
+            cursorColor: '#f97316',
+            barWidth: 3,
+            barGap: 3,
+            barRadius: 4,
+            height: 180,
+            normalize: false,
+            media: audioEl,
+            peaks: [fakePeaks],
+            duration: realDuration
+        });
+
+        wavesurfer.on('audioprocess', (time) => {
+            currentTimeDisplay.textContent = formatTime(time);
+            highlightTranscription(time);
+        });
+
+        wavesurfer.on('interaction', () => {
+            const time = wavesurfer.getCurrentTime();
+            currentTimeDisplay.textContent = formatTime(time);
+            highlightTranscription(time);
+        });
+
+        wavesurfer.on('play', () => { playIcon.className = 'pause-icon'; });
+        wavesurfer.on('pause', () => { playIcon.className = 'play-icon'; });
     });
 
-    wavesurfer.load(url);
-
-    wavesurfer.on('ready', () => {
-        durationDisplay.textContent = formatTime(wavesurfer.getDuration());
+    audioEl.addEventListener('error', (e) => {
+        console.error('Audio element error:', e);
+        addLog('⚠️ Audio player failed to load. Playback may not work.', 'error');
     });
-
-    wavesurfer.on('audioprocess', (time) => {
-        currentTimeDisplay.textContent = formatTime(time);
-        highlightTranscription(time);
-    });
-
-    wavesurfer.on('seek', (prog) => {
-        const time = prog * wavesurfer.getDuration();
-        currentTimeDisplay.textContent = formatTime(time);
-        highlightTranscription(time);
-    });
-
-    wavesurfer.on('play', () => { playIcon.className = 'pause-icon'; });
-    wavesurfer.on('pause', () => { playIcon.className = 'play-icon'; });
 }
 
 function formatTime(seconds) {
@@ -68,88 +125,82 @@ function formatTime(seconds) {
     return `${minutes}:${secs.toString().padStart(2, '0')}`;
 }
 
-function formatWait(totalSeconds) {
-    const mins = Math.floor(totalSeconds / 60);
-    const secs = totalSeconds % 60;
-    if (mins > 0) return `${mins}m ${secs}s`;
-    return `${secs}s`;
+function addLog(message, type = 'info') {
+    if (!localLogConsole) return;
+    const line = document.createElement('div');
+    line.className = `log-line ${type}`;
+    const time = new Date().toLocaleTimeString([], { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    line.textContent = `[${time}] ${message}`;
+    localLogConsole.appendChild(line);
+    localLogConsole.scrollTop = localLogConsole.scrollHeight;
 }
-
-dropzone.addEventListener('dragover', (e) => {
-    e.preventDefault();
-    dropzone.classList.add('dragging');
-});
-
-dropzone.addEventListener('dragleave', () => {
-    dropzone.classList.remove('dragging');
-});
-
-dropzone.addEventListener('drop', (e) => {
-    e.preventDefault();
-    dropzone.classList.remove('dragging');
-    const files = e.dataTransfer.files;
-    if (files.length > 0) handleFile(files[0]);
-});
 
 let knownSpeakers = [];
 
 async function handleFile(file) {
+    console.log("Handling file:", file.name);
+    // UI Transition
     filenameDisplay.textContent = file.name;
-    dropzone.classList.add('hidden');
+    launchScreen.classList.add('hidden');
     mainInterface.classList.remove('hidden');
+
     knownSpeakers = [];
     renderSpeakerList();
+    transcriptionContent.innerHTML = '<div class="placeholder-text">Uploading to server...</div>';
 
-    // Load audio player immediately
-    const url = URL.createObjectURL(file);
-    initWaveSurfer(url);
+    // Do NOT init WaveSurfer here — wait until upload completes to use server URL
 
-    // Check if a transcription already exists for this file
-    try {
-        const checkResponse = await fetch(`/check/${file.name}`);
-        const checkData = await checkResponse.json();
-
-        if (checkData.status === 'completed' && checkData.result) {
-            // Transcription exists! Load it directly
-            currentTaskId = file.name;
-            loadCompletedTranscription(checkData);
-            return;
-        }
-    } catch (err) {
-        console.log('No existing transcription found, proceeding with upload.');
-    }
-
-    // No existing transcription — upload to server + S3
-    startTranscriptionBtn.classList.add('hidden');
+    // Initial log state
     progressSection.classList.remove('hidden');
-    statusText.textContent = '☁️ Uploading to cloud storage...';
+    statusText.textContent = '☁️ Uploading audio...';
     percentText.textContent = '';
+    progressBar.style.width = '0%';
+    localLogConsole.innerHTML = '<div class="log-line info">🚀 Session initialized...</div>';
+    addLog(`📂 Preparing ${file.name}...`, 'info');
+
+    // Hide action buttons initially
+    if (startDiarizeBtn) startDiarizeBtn.classList.add('hidden');
+    if (startTranscribeBtn) startTranscribeBtn.classList.add('hidden');
 
     const formData = new FormData();
     formData.append('file', file);
 
     try {
+        addLog('📤 Uploading to local server...', 'info');
         const response = await fetch('/upload', {
             method: 'POST',
             body: formData
         });
         const data = await response.json();
-        currentTaskId = data.task_id;
 
-        // Check if upload returned an existing transcription
         if (data.task_id) {
-            const statusResp = await fetch(`/status/${data.task_id}`);
-            const statusData = await statusResp.json();
-            if (statusData.status === 'completed') {
-                loadCompletedTranscription(statusData);
-                return;
-            }
-        }
+            currentTaskId = data.task_id;
+            addLog(`✅ Upload complete (ID: ${currentTaskId})`, 'success');
 
-        // Start polling for S3 upload progress
-        startPolling();
+            // Re-sync WaveSurfer to the server-side file instead of blob for better range support
+            const serverUrl = `/audio/${encodeURIComponent(currentTaskId)}`;
+            initWaveSurfer(serverUrl);
+
+            if (data.status === 'completed') {
+                addLog('✨ Auto-detected existing transcription!', 'success');
+                // We need to fetch the status once to get the result data
+                const statusRes = await fetch(`/status/${currentTaskId}`);
+                const statusData = await statusRes.json();
+                updateUI(statusData);
+            } else if (data.status === 'diarization_complete') {
+                addLog('✨ Auto-detected existing diarization!', 'success');
+                startPolling();
+            } else {
+                addLog('Await user action to start diarization.', 'muted');
+                startPolling();
+            }
+        } else {
+            throw new Error("No task_id returned from server");
+        }
     } catch (err) {
-        statusText.textContent = 'Upload failed';
+        console.error('Upload failed:', err);
+        statusText.textContent = '❌ Upload failed';
+        addLog(`❌ Fatal: ${err.message}`, 'error');
     }
 }
 
@@ -158,8 +209,8 @@ async function handleFile(file) {
 
 function loadCompletedTranscription(data) {
     progressSection.classList.add('hidden');
-    startTranscriptionBtn.classList.add('hidden');
     statusText.textContent = '✅ Transcription loaded';
+    addLog('✨ Processing complete!', 'success');
 
     transcriptionContent.innerHTML = '';
     segments = data.result;
@@ -184,30 +235,12 @@ function loadCompletedTranscription(data) {
 }
 
 
-// ─── Start Transcription (S3 Upload) ───
-
-startTranscriptionBtn.onclick = async () => {
-    // In the Pod workflow, this button triggers S3 upload
-    // The transcription itself happens on RunPod
-    if (!currentTaskId) return;
-
-    startTranscriptionBtn.disabled = true;
-    startTranscriptionBtn.textContent = 'Uploading...';
-
-    const formData = new FormData();
-    // Re-upload is not needed here since file is already on server
-    // Just trigger S3 upload via status check
-    startTranscriptionBtn.classList.add('hidden');
-    progressSection.classList.remove('hidden');
-    statusText.textContent = '☁️ File uploaded to cloud. Run worker on Pod to transcribe.';
-};
-
-
 // ─── Polling ───
 
 function startPolling() {
     if (statusInterval) clearInterval(statusInterval);
     lastSegmentCount = 0;
+    lastStatus = null;
 
     statusInterval = setInterval(async () => {
         if (!currentTaskId) return;
@@ -228,23 +261,74 @@ function startPolling() {
 }
 
 
+// ─── Phase Actions ───
+
+if (startDiarizeBtn) {
+    startDiarizeBtn.onclick = async () => {
+        if (!currentTaskId) return;
+        startDiarizeBtn.disabled = true;
+        addLog('▶️ Triggering Diarization phase...', 'info');
+        try {
+            const response = await fetch(`/diarize/${currentTaskId}`, { method: 'POST' });
+            if (!response.ok) throw new Error("Server error starting diarization");
+        } catch (err) {
+            addLog(`❌ Error triggering diarization: ${err.message}`, 'error');
+            startDiarizeBtn.disabled = false;
+        }
+    };
+}
+
+if (startTranscribeBtn) {
+    startTranscribeBtn.onclick = async () => {
+        if (!currentTaskId) return;
+        startTranscribeBtn.disabled = true;
+        addLog('▶️ Triggering Transcription phase...', 'info');
+        try {
+            const response = await fetch(`/transcribe/${currentTaskId}`, { method: 'POST' });
+            if (!response.ok) throw new Error("Server error starting transcription");
+        } catch (err) {
+            addLog(`❌ Error triggering transcription: ${err.message}`, 'error');
+            startTranscribeBtn.disabled = false;
+        }
+    };
+}
+
+
 // ─── UI Updates ───
 
 function updateUI(data) {
-    if (data.status === 'uploading') {
+    if (data.status === 'uploaded') {
         progressSection.classList.remove('hidden');
-        startTranscriptionBtn.classList.add('hidden');
-        statusText.textContent = '☁️ Uploading to cloud...';
+        statusText.textContent = `File ready.`;
+        percentText.textContent = ``;
+        progressBar.style.width = `0%`;
+        if (startDiarizeBtn) {
+            startDiarizeBtn.classList.remove('hidden');
+            startDiarizeBtn.disabled = false;
+        }
+        if (startTranscribeBtn) startTranscribeBtn.classList.add('hidden');
+    }
+    else if (data.status === 'diarization_complete') {
+        progressSection.classList.remove('hidden');
+        statusText.textContent = `Diarization complete.`;
+        percentText.textContent = `100%`;
+        progressBar.style.width = `100%`;
+
+        if (startDiarizeBtn) startDiarizeBtn.classList.add('hidden');
+        if (startTranscribeBtn) {
+            startTranscribeBtn.classList.remove('hidden');
+            startTranscribeBtn.disabled = false;
+        }
+    }
+    else if (data.status === 'pending' || data.status === 'diarizing' || data.status === 'transcribing' || data.status === 'aligning') {
+        progressSection.classList.remove('hidden');
+        let stateStr = "Processing";
+        if (data.status === 'diarizing') stateStr = "Diarizing audio (Pyannote)";
+        if (data.status === 'transcribing') stateStr = "Transcribing (Whisper)";
+        if (data.status === 'aligning') stateStr = "Aligning speakers";
+        statusText.textContent = `⚡ ${stateStr}...`;
         percentText.textContent = `${data.progress || 0}%`;
         progressBar.style.width = `${data.progress || 0}%`;
-    }
-    else if (data.status === 'uploaded') {
-        // S3 upload done
-        progressSection.classList.remove('hidden');
-        statusText.textContent = '✅ Uploaded to cloud! Now run the worker on your Pod.';
-        percentText.textContent = '100%';
-        progressBar.style.width = '100%';
-        clearInterval(statusInterval);
     }
     else if (data.status === 'completed') {
         loadCompletedTranscription(data);
@@ -255,6 +339,24 @@ function updateUI(data) {
         statusText.textContent = `❌ Error: ${data.error || 'Unknown'}`;
         percentText.textContent = '';
         progressBar.style.width = '0%';
+        addLog(`❌ Engine Error: ${data.error}`, 'error');
+        transcriptionContent.innerHTML = `<div class="error-text">Engine error. Check console and retry.</div>`;
+    }
+
+    // Status change logging
+    if (data.status !== lastStatus) {
+        if (data.status === 'uploaded') addLog('📂 Waiting for Diarization trigger...', 'muted');
+        if (data.status === 'diarizing') {
+            addLog('🧠 Analyzing speaker signatures (Pyannote)...', 'info');
+            if (startDiarizeBtn) startDiarizeBtn.disabled = true;
+        }
+        if (data.status === 'diarization_complete') addLog('✨ Diarization finished. Waiting for Transcription trigger...', 'info');
+        if (data.status === 'transcribing') {
+            addLog('🎤 Running Whisper transcription engine...', 'info');
+            if (startTranscribeBtn) startTranscribeBtn.disabled = true;
+        }
+        if (data.status === 'aligning') addLog('🔗 Finalizing speaker alignment...', 'info');
+        lastStatus = data.status;
     }
 
     // Handle live result segments (if transcribing locally)
@@ -430,7 +532,14 @@ document.getElementById('open-docx-btn').onclick = () => {
     if (docx) window.open(`/download/${docx}`, '_blank');
 };
 
-removeFileBtn.onclick = () => location.reload();
+removeFileBtn.onclick = () => {
+    launchScreen.classList.remove('hidden');
+    mainInterface.classList.add('hidden');
+    if (wavesurfer) wavesurfer.destroy();
+    currentTaskId = null;
+    segments = [];
+    transcriptionContent.innerHTML = '<div class="placeholder-text">Your transcription will appear here...</div>';
+};
 
 window.seekTo = seekTo;
 window.setSegmentSpeaker = setSegmentSpeaker;

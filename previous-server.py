@@ -1,8 +1,9 @@
-from fastapi import FastAPI, UploadFile, File, BackgroundTasks, Body
+
+from fastapi import FastAPI, UploadFile, File, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
-from faster_whisper import WhisperModel
+import whisper
 import os
 import torch
 from pathlib import Path
@@ -13,13 +14,8 @@ import subprocess
 import math
 import re
 import threading
-from datetime import datetime
-
 
 from docx import Document
-import torchaudio
-if not hasattr(torchaudio, "list_audio_backends"):
-    torchaudio.list_audio_backends = lambda: ["soundfile"]
 from pyannote.audio import Pipeline
 
 
@@ -42,10 +38,6 @@ CACHE_DIR.mkdir(exist_ok=True)
 
 # Transcriptions storage
 transcriptions = {}
-
-def log_info(message):
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    print(f"[{timestamp}] [VERSION 2.0.1] {message}")
 
 def format_timestamp(seconds):
     hours = int(seconds // 3600)
@@ -72,10 +64,9 @@ if sys.platform == "win32":
 
 model_lock = threading.Lock()
 
-log_info(f"Loading faster-whisper model on {device}...")
-compute_type = "float16" if device == "cuda" else "int8"
-model = WhisperModel("turbo", device=device, compute_type=compute_type)
-log_info("faster-whisper loaded.")
+print(f"Loading Whisper model on {device}...")
+model = whisper.load_model("turbo", device=device)
+print("Whisper loaded.")
 
 HF_TOKEN = "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"
 print("Loading Diarization Pipeline...")
@@ -86,25 +77,26 @@ try:
     )
     if diarization_pipeline:
         diarization_pipeline.to(torch.device(device))
-        log_info("Diarization Pipeline loaded.")
+        print("Diarization Pipeline loaded.")
     else:
-        log_info("Failed to load Diarization Pipeline (check token/access).")
+        print("Failed to load Diarization Pipeline (check token/access).")
 except Exception as e:
     print(f"Error loading diarization pipeline: {e}")
     diarization_pipeline = None
 
-def run_diarization(file_path: Path, task_id: str = None):
+def run_diarization(file_path: Path):
     if not diarization_pipeline:
         return []
     
     # Cache diarization results to a JSON file to avoid 40min re-runs
     cache_file = CACHE_DIR / f"{file_path.stem}_diarize.json"
     if cache_file.exists():
-        log_info(f"Loading cached diarization for {file_path.name}...")
+        print(f"Loading cached diarization for {file_path.name}...")
         with open(cache_file, 'r') as f:
             return json.load(f)
 
-    log_info(f"Running diarization on {file_path.name}...")
+    print(f"Running diarization on {file_path.name}...")
+    # Convert to WAV 16kHz mono for reliability
     wav_path = CACHE_DIR / f"{file_path.stem}_diarize.wav"
     cmd = [
         "ffmpeg", "-y", "-i", str(file_path),
@@ -112,9 +104,7 @@ def run_diarization(file_path: Path, task_id: str = None):
     ]
     subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     
-    duration = get_duration(file_path)
-    log_info(f"Audio converted. Duration: {duration:.2f}s. Loading with soundfile...")
-    
+    print("Audio converted. Loading with soundfile...")
     import soundfile as sf
     import numpy as np
     data, sample_rate = sf.read(str(wav_path), dtype='float32')
@@ -125,25 +115,10 @@ def run_diarization(file_path: Path, task_id: str = None):
     waveform = torch.from_numpy(data)
     audio_input = {"waveform": waveform, "sample_rate": sample_rate}
     
-    log_info("Starting pyannote pipeline with progress tracking...")
-    
-    def hook(step_name, step_artifact, file=None, **kwargs):
-        if task_id and task_id in transcriptions:
-            try:
-                # Add a quick debug print to see if pyannote is moving or stuck
-                print(f"[Pyannote] Step: {step_name}")
-                from pyannote.core import Segment
-                if isinstance(step_artifact, Segment):
-                    # Clamp progress to 99% during diarization phase
-                    p = min(99, int((step_artifact.end / duration) * 100))
-                    if p > transcriptions[task_id].get("progress", 0):
-                        transcriptions[task_id]["progress"] = p
-            except Exception:
-                pass
-
+    print("Starting pyannote pipeline...")
     with model_lock:
-        diarize_output = diarization_pipeline(audio_input, min_speakers=2, hook=hook)
-    log_info("Diarization complete.")
+        diarize_output = diarization_pipeline(audio_input, min_speakers=2)
+    print("Diarization complete.")
     
     if hasattr(diarize_output, 'speaker_diarization'):
         annotation = diarize_output.speaker_diarization
@@ -292,28 +267,12 @@ def self_group_words(speaker_words, speaker_map, speaker_counter):
     
     return merged
 
-def run_diarize_task(file_path: Path, task_id: str):
+def run_live_transcription(file_path: Path, task_id: str):
     try:
+        # Phase 1: Diarization
         transcriptions[task_id]["status"] = "diarizing"
-        transcriptions[task_id]["progress"] = 0
-        timeline = run_diarization(file_path, task_id=task_id)
-        
-        # Cache timeline in transcription object for the next step
-        transcriptions[task_id]["timeline"] = timeline
-        transcriptions[task_id]["status"] = "diarization_complete"
-        transcriptions[task_id]["progress"] = 100
-        log_info(f"Diarization complete for {task_id}.")
-    except Exception as e:
-        import traceback
-        traceback.print_exc()
-        print(f"Error in diarization task: {e}")
-        transcriptions[task_id]["status"] = "error"
-        transcriptions[task_id]["error"] = str(e)
-
-
-def run_transcribe_task(file_path: Path, task_id: str):
-    try:
-        timeline = transcriptions[task_id].get("timeline", [])
+        transcriptions[task_id]["progress"] = 5
+        timeline = run_diarization(file_path)
         
         # Phase 2: Silence-aware chunked transcription
         transcriptions[task_id]["status"] = "transcribing"
@@ -352,14 +311,6 @@ def run_transcribe_task(file_path: Path, task_id: str):
             duration = get_duration(file_path)
             natural_chunks = [{"start": i*30, "end": min((i+1)*30, duration)} for i in range(math.ceil(duration/30))]
 
-        # Decode entire file to WAV once to prevent ffmpeg from scanning the large source file repeatedly
-        full_wav_path = CACHE_DIR / f"{task_id}_full.wav"
-        if not full_wav_path.exists():
-            log_info(f"Decoding full audio to WAV for fast extraction...")
-            subprocess.run([
-                "ffmpeg", "-y", "-i", str(file_path), "-ar", "16000", "-ac", "1", "-c:a", "pcm_s16le", str(full_wav_path)
-            ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-
         speaker_map = {}
         speaker_counter = 0
         all_speaker_words = []
@@ -374,10 +325,10 @@ def run_transcribe_task(file_path: Path, task_id: str):
                 
             chunk_path = CACHE_DIR / f"{task_id}_chunk_{i}.wav"
             
-            # Extract chunk efficiently from the uncompressed WAV and properly rewrite headers
+            # Extract chunk precisely at silence boundaries
             cmd = [
                 "ffmpeg", "-y", "-ss", str(start_time), "-t", str(duration_s),
-                "-i", str(full_wav_path), "-c:a", "pcm_s16le", str(chunk_path)
+                "-i", str(file_path), "-ar", "16000", "-ac", "1", "-c:a", "pcm_s16le", str(chunk_path)
             ]
             subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             
@@ -390,98 +341,52 @@ def run_transcribe_task(file_path: Path, task_id: str):
                 last_words = [sw["word"] for sw in all_speaker_words[-50:]]
                 previous_context = " ".join(last_words)
             
-            log_info(f"Transcribing natural chunk {i+1}/{len(natural_chunks)} ({start_time:.2f}s - {end_time:.2f}s)")
+            print(f"Transcribing natural chunk {i+1}/{len(natural_chunks)} ({start_time:.2f}s - {end_time:.2f}s)")
             
-            try:
-                with model_lock:
-                    # Run fast transcription using faster-whisper
-                    segments, info = model.transcribe(
-                        str(chunk_path),
-                        language="ru",
-                        word_timestamps=True,
-                        condition_on_previous_text=True,
-                        initial_prompt=previous_context if previous_context else "Это аудиозапись беседы или интервью.",
-                    )
-                    # Force evaluation of the generator and list conversion inside the lock
-                    segments = list(segments)
-
-                for segment in segments:
-                    words = getattr(segment, "words", [])
-                    if not words:
-                        text = re.sub(r'\[.*?\]', '', segment.text).strip()
-                        if text:
-                            abs_start = segment.start + start_time
-                            abs_end = segment.end + start_time
-                            raw = get_speaker_for_word(timeline, abs_start, abs_end)
-                            all_speaker_words.append({
-                                "word": text, "start": abs_start, "end": abs_end, "speaker_raw": raw
-                            })
-                        continue
-                    
-                    for w in words:
-                        word_text = getattr(w, "word", "").strip()
-                        if not word_text: continue
-                        abs_start = w.start + start_time
-                        abs_end = w.end + start_time
+            with model_lock:
+                result = model.transcribe(
+                    str(chunk_path),
+                    language="ru",
+                    verbose=False,
+                    fp16=False,
+                    word_timestamps=True,
+                    condition_on_previous_text=True,
+                    initial_prompt=previous_context if previous_context else "Это аудиозапись беседы или интервью.",
+                )
+            
+            # Extract words
+            for segment in result["segments"]:
+                words = segment.get("words", [])
+                if not words:
+                    text = re.sub(r'\[.*?\]', '', segment["text"]).strip()
+                    if text:
+                        abs_start = segment["start"] + start_time
+                        abs_end = segment["end"] + start_time
                         raw = get_speaker_for_word(timeline, abs_start, abs_end)
                         all_speaker_words.append({
-                            "word": word_text, "start": abs_start, "end": abs_end, "speaker_raw": raw
+                            "word": text,
+                            "start": abs_start,
+                            "end": abs_end,
+                            "speaker_raw": raw
                         })
-            except Exception as chunk_err:
-                if "cublas" in str(chunk_err).lower() or "cudnn" in str(chunk_err).lower() or getattr(chunk_err, "message", "") == "Library cublas64_12.dll is not found or cannot be loaded":
-                    log_info(f"WARNING: Chunk {i+1} faster-whisper DLL error ({chunk_err}), falling back to openai-whisper...")
-                    import whisper
-                    global fallback_model
-                    if "fallback_model" not in globals():
-                        log_info(f"Loading robust whisper fallback model on {device}...")
-                        fallback_model = whisper.load_model("turbo", device=device)
-                    
-                    try:
-                        with model_lock:
-                            result = fallback_model.transcribe(
-                                str(chunk_path),
-                                language="ru",
-                                verbose=False,
-                                fp16=True, # Try FP16 first
-                                word_timestamps=True,
-                                condition_on_previous_text=True,
-                                initial_prompt=previous_context if previous_context else "Это аудиозапись беседы или интервью.",
-                            )
-                    except Exception as e2:
-                        log_info(f"FP16 fallback failing ({e2}), retrying FP32...")
-                        with model_lock:
-                            result = fallback_model.transcribe(
-                                str(chunk_path), language="ru", verbose=False, fp16=False, word_timestamps=True,
-                                condition_on_previous_text=True, initial_prompt=previous_context if previous_context else "Это аудиозапись беседы или интервью."
-                            )
-                    
-                    for segment in result["segments"]:
-                        words = segment.get("words", [])
-                        if not words:
-                            text = re.sub(r'\[.*?\]', '', segment["text"]).strip()
-                            if text:
-                                abs_start = segment["start"] + start_time
-                                abs_end = segment["end"] + start_time
-                                raw = get_speaker_for_word(timeline, abs_start, abs_end)
-                                all_speaker_words.append({
-                                    "word": text, "start": abs_start, "end": abs_end, "speaker_raw": raw
-                                })
-                            continue
-                        
-                        for w in words:
-                            word_text = w.get("word", "").strip()
-                            if not word_text: continue
-                            abs_start = w["start"] + start_time
-                            abs_end = w["end"] + start_time
-                            raw = get_speaker_for_word(timeline, abs_start, abs_end)
-                            all_speaker_words.append({
-                                "word": word_text, "start": abs_start, "end": abs_end, "speaker_raw": raw
-                            })
-                else:
-                    log_info(f"WARNING: Chunk {i+1} failed completely ({chunk_err}), skipping...")
-            finally:
-                if chunk_path.exists():
-                    os.remove(chunk_path)
+                    continue
+                
+                for w in words:
+                    word_text = w.get("word", "").strip()
+                    if not word_text:
+                        continue
+                    abs_start = w["start"] + start_time
+                    abs_end = w["end"] + start_time
+                    raw = get_speaker_for_word(timeline, abs_start, abs_end)
+                    all_speaker_words.append({
+                        "word": word_text,
+                        "start": abs_start,
+                        "end": abs_end,
+                        "speaker_raw": raw
+                    })
+            
+            if chunk_path.exists():
+                os.remove(chunk_path)
             
             # Progress tracking
             transcriptions[task_id]["progress"] = 10 + int(((i + 1) / len(natural_chunks)) * 80)
@@ -492,11 +397,8 @@ def run_transcribe_task(file_path: Path, task_id: str):
                 speaker_counter = max(speaker_counter, len(speaker_map))
                 transcriptions[task_id]["result"] = live_segments
         
-        log_info(f"Assigned speakers to {len(all_speaker_words)} words across {len(natural_chunks)} natural chunks.")
+        print(f"Assigned speakers to {len(all_speaker_words)} words across {len(natural_chunks)} natural chunks.")
         
-        if full_wav_path.exists():
-            os.remove(full_wav_path)
-            
         # Phase 3: Final grouping
         transcriptions[task_id]["status"] = "aligning"
         transcriptions[task_id]["progress"] = 95
@@ -577,7 +479,7 @@ def run_transcribe_task(file_path: Path, task_id: str):
             "docx_path": docx_name
         })
 
-        log_info(f"Transcription complete: {len(smoothed)} speaker turns.")
+        print(f"Transcription complete: {len(smoothed)} speaker turns.")
         
     except Exception as e:
         import traceback
@@ -593,99 +495,30 @@ async def upload_file(file: UploadFile = File(...)):
         buffer.write(await file.read())
     
     task_id = file.filename
-    log_info(f"Upload received: {task_id}")
-    
-    status = "uploaded"
-    progress = 0
-    timeline = []
-    result = []
-    
-    # Auto-detect cache
-    stem = Path(file.filename).stem
-    cache_file = CACHE_DIR / f"{stem}_diarize.json"
-    full_transcription_file = UPLOAD_DIR / f"{stem}.json"
-    
-    if full_transcription_file.exists():
-        log_info(f"Auto-detected full transcription for {task_id}")
-        with open(full_transcription_file, 'r', encoding='utf-8') as f:
-            cached_data = json.load(f)
-            result = cached_data.get("result", [])
-            status = "completed"
-            progress = 100
-    elif cache_file.exists():
-        log_info(f"Auto-detected diarization for {task_id}")
-        with open(cache_file, 'r') as f:
-            timeline = json.load(f)
-            status = "diarization_complete"
-            progress = 100
-
     transcriptions[task_id] = {
         "filename": file.filename,
-        "status": status,
-        "progress": progress,
-        "timeline": timeline,
-        "result": result,
-        "eta": "Waiting..."
+        "status": "uploaded",
+        "progress": 0,
+        "result": [],
+        "eta": "Waiting to start..."
     }
     
-    return {"task_id": task_id, "status": status}
+    # File saved — transcription starts only when user hits "Start Transcription"
+    return {"task_id": task_id}
 
-@app.post("/import_diarization/{task_id}")
-async def import_diarization(task_id: str, timeline: list = Body(...)):
-    if task_id not in transcriptions:
-        return {"error": "Task not found"}
-    
-    stem = Path(transcriptions[task_id]["filename"]).stem
-    cache_file = CACHE_DIR / f"{stem}_diarize.json"
-    with open(cache_file, 'w') as f:
-        json.dump(timeline, f)
-        
-    transcriptions[task_id].update({
-        "status": "diarization_complete",
-        "progress": 100,
-        "timeline": timeline
-    })
-    log_info(f"Manual diarization imported for {task_id}")
-    return {"status": "success"}
-
-@app.post("/import_transcription/{task_id}")
-async def import_transcription(task_id: str, result: list = Body(...)):
-    if task_id not in transcriptions:
-        return {"error": "Task not found"}
-    
-    transcriptions[task_id].update({
-        "status": "completed",
-        "progress": 100,
-        "result": result
-    })
-    
-    # Save to JSON, MD, DOCX
-    stem = Path(transcriptions[task_id]["filename"]).stem
-    full_json_path = UPLOAD_DIR / f"{stem}.json"
-    with open(full_json_path, 'w', encoding='utf-8') as f:
-        json.dump({"result": result}, f)
-        
-    regenerate_files(task_id)
-    log_info(f"Manual transcription imported for {task_id}")
-    return {"status": "success"}
-
-@app.post("/diarize/{task_id}")
-async def start_diarization(task_id: str):
-    if task_id not in transcriptions:
-        return {"error": "Task not found"}
-    
-    file_path = UPLOAD_DIR / transcriptions[task_id]["filename"]
-    t = threading.Thread(target=run_diarize_task, args=(file_path, task_id), daemon=True)
-    t.start()
-    return {"status": "started"}
 
 @app.post("/transcribe/{task_id}")
 async def start_transcription(task_id: str):
-    if task_id not in transcriptions:
+    task = transcriptions.get(task_id)
+    if not task:
         return {"error": "Task not found"}
+    if task["status"] != "uploaded":
+        return {"error": "Transcription already started or completed"}
     
-    file_path = UPLOAD_DIR / transcriptions[task_id]["filename"]
-    t = threading.Thread(target=run_transcribe_task, args=(file_path, task_id), daemon=True)
+    file_path = UPLOAD_DIR / task["filename"]
+    task["status"] = "pending"
+    
+    t = threading.Thread(target=run_live_transcription, args=(file_path, task_id), daemon=True)
     t.start()
     return {"status": "started"}
 

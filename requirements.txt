@@ -1,8 +1,15 @@
-# Lightweight local server (no GPU needed)
 fastapi
 uvicorn
 python-multipart
 python-docx
-requests
-boto3
+faster-whisper
+pyannote.audio
+soundfile
+torch
+torchvision
+torchaudio
+speechbrain
+omegaconf
+einops
+onnxruntime-gpu
 python-dotenv

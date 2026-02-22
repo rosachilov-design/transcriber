@@ -8,26 +8,63 @@
     <link rel="stylesheet" href="style.css">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600&family=JetBrains+Mono&display=swap"
+    <link
+        href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono&display=swap"
         rel="stylesheet">
     <script src="https://unpkg.com/wavesurfer.js@7"></script>
 </head>
 
 <body>
     <div id="app" class="app-container">
-        <!-- Root Dropzone -->
-        <div id="dropzone" class="dropzone-overlay">
-            <div class="drop-card">
-                <div class="drop-icon">💿</div>
-                <h2>Drop Audio File</h2>
-                <p>M4A, MP3, WAV supported · High Quality Transcription</p>
+
+        <!-- ═══════════════════════════════════════════════ -->
+        <!--  LAUNCH SCREEN                                  -->
+        <!-- ═══════════════════════════════════════════════ -->
+        <div id="launch-screen" class="launch-screen">
+
+            <!-- Background Orbs -->
+            <div class="orb orb-orange"></div>
+            <div class="orb orb-blue"></div>
+
+            <!-- Header -->
+            <div class="launch-header">
+                <div class="logo-badge">⚡</div>
+                <h1 class="logo-title">Transcriber <span class="logo-pro">Pro</span></h1>
+                <p class="logo-tagline">GPU-powered · Speaker Diarization · Local Storage</p>
             </div>
+
+            <!-- Two-column layout -->
+            <div class="launch-grid">
+
+                <!-- Left: Drop Zone -->
+                <div class="launch-card drop-card-big" id="dropzone">
+                    <div class="card-icon">🎙️</div>
+                    <h2>Drop Audio File</h2>
+                    <p class="card-sub">M4A, MP3, WAV supported</p>
+                    <div class="drop-hint">
+                        <span class="drop-hint-line"></span>
+                        <span>or click to browse</span>
+                        <span class="drop-hint-line"></span>
+                    </div>
+                    <input type="file" id="file-input" accept=".m4a,.mp3,.wav" style="display:none">
+                    <div class="drop-formats">
+                        <span class="format-tag">M4A</span>
+                        <span class="format-tag">MP3</span>
+                        <span class="format-tag">WAV</span>
+                    </div>
+                </div>
+
+            </div>
+
         </div>
 
+        <!-- ═══════════════════════════════════════════════ -->
+        <!--  MAIN REVIEW INTERFACE (shown after file drop)  -->
+        <!-- ═══════════════════════════════════════════════ -->
         <div id="main-interface" class="interface hidden">
             <!-- Left Side: Audio and Progress -->
             <div class="left-panel">
-                <button id="remove-file" class="text-btn">Remove File</button>
+                <button id="remove-file" class="text-btn">← Back</button>
 
                 <div class="audio-header">
                     <h2 id="filename-display">filename.m4a</h2>
@@ -67,10 +104,10 @@
                     </div>
                 </div>
 
+                <!-- Manual Trigger Actions -->
                 <div id="transcription-actions" class="transcription-actions">
-                    <button id="start-transcription-btn" class="start-transcription-btn">
-                        Start Transcription
-                    </button>
+                    <button id="start-diarize-btn" class="start-btn hidden">Start Diarization</button>
+                    <button id="start-transcribe-btn" class="start-btn hidden">Start Transcription</button>
                 </div>
 
                 <div class="progress-section hidden" id="progress-section">
@@ -81,7 +118,16 @@
                     <div class="progress-bar-container">
                         <div id="progress-bar" class="progress-bar"></div>
                     </div>
+                    <div class="local-log-container">
+                        <div class="log-header">
+                            <span class="log-dot"></span> ACTIVITY
+                        </div>
+                        <div id="local-log-console" class="log-console">
+                            <div class="log-line muted">Initializing local engine...</div>
+                        </div>
+                    </div>
                 </div>
+
             </div>
 
             <!-- Right Side: Transcription -->
@@ -92,7 +138,6 @@
                         <button id="add-speaker-btn">Add</button>
                     </div>
                     <div id="speaker-list" class="speaker-chips">
-                        <!-- Added speakers will appear here -->
                     </div>
                 </div>
 
